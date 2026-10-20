@@ -15,6 +15,7 @@ use crate::audio::{opened_sink, AudioSink, Ring, Sfx};
 use crate::core::{open_core, Opened};
 use crate::emu::{CoreState, EmuHandle, Speed};
 use crate::frames::FrameRef;
+use crate::handoff::Handoff;
 use crate::input::Pad;
 use crate::persist;
 use crate::prefetch::Prefetch;
@@ -37,6 +38,7 @@ pub struct Session {
     prefetch: Prefetch,
     reloading: bool,
     driven: bool,
+    handoff: Option<Handoff>,
 }
 
 impl Session {
@@ -63,6 +65,7 @@ impl Session {
             prefetch: Prefetch::default(),
             reloading: false,
             driven: false,
+            handoff: None,
         };
         // A game left running comes straight back. Its core loads on its own thread, so start it
         // now and let the card read overlap the rest of the boot. Waiting for the first update
@@ -466,6 +469,11 @@ impl Session {
         }
     }
 
+    /// The cart to hand to MinUI's emulator, once it has gone in on the TrimUI Smart.
+    pub fn handoff(&self) -> Option<&Handoff> {
+        self.handoff.as_ref()
+    }
+
     fn no_core() -> bool {
         std::env::var_os("SLOT_NO_CORE").is_some_and(|v| v != "0")
     }
@@ -483,6 +491,19 @@ impl Session {
             Phase::Inserting { cart, .. } => cart.clone(),
             _ => return,
         };
+        if cfg!(feature = "trimui") {
+            if self.handoff.is_none() && self.app.inserted() {
+                self.handoff = self
+                    .app
+                    .seated_cart()
+                    .filter(|c| c.stem == stem)
+                    .map(|c| Handoff {
+                        platform: c.platform,
+                        rom: c.rom.clone(),
+                    });
+            }
+            return;
+        }
         if self.emu.is_none() && self.opening.is_none() {
             let (_, serial) = self.app.link_mode(&stem);
             self.spawn_core(&stem, serial);

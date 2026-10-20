@@ -753,6 +753,20 @@ impl Frontend {
     pub fn poweroff(&mut self) {
         self.session.app_mut().poweroff();
     }
+
+    pub fn handing_off(&self) -> bool {
+        self.session.handoff().is_some()
+    }
+
+    /// Settles slot's own writes and names the cart for the boot script to open in MinUI's
+    /// emulator. slot exits after this.
+    pub fn hand_off(&mut self) -> std::io::Result<()> {
+        self.session.app_mut().settle_saves();
+        let Some(handoff) = self.session.handoff().cloned() else {
+            return Ok(());
+        };
+        crate::handoff::write(&crate::handoff::path(), &handoff)
+    }
 }
 
 fn link_legend_faces(ink: [u8; 3]) -> Vec<UndoFace> {

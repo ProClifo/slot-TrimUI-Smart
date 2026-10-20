@@ -1,4 +1,4 @@
-//! Times the soft compositor drawing slot's shelf and a running cart at the TrimUI Smart's 320x240,
+//! Times the soft compositor drawing slot's shelf at the TrimUI Smart's 320x240,
 //! with no panel: the frames go to memory. Run it on the device to see what drawing alone costs.
 //! It boots on a scratch root under /tmp with a few blank carts, writes nothing anywhere else and
 //! plays no sound.
@@ -99,28 +99,5 @@ fn main() {
     }
     report("shelf, scrolling", took);
 
-    let mut play: VecDeque<Vec<RawEvent>> = VecDeque::new();
-    play.push_back(vec![RawEvent::Down(Btn::A)]);
-    play.push_back(vec![RawEvent::Up(Btn::A)]);
-    let mut input = Script(play);
-    let present = Duration::from_micros(16_742);
-    // The cart goes in and its core opens on the clock, not per frame, so wait for it at 60 Hz.
-    for _ in 0..480 {
-        let began = Instant::now();
-        f.advance(&mut input);
-        f.drive_emulator();
-        f.step_emulator(present, Duration::from_millis(12));
-        f.render(&mut c, WINDOW);
-        std::thread::sleep(present.saturating_sub(began.elapsed()));
-    }
-    let mut took = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
-        f.advance(&mut input);
-        f.step_emulator(present, Duration::from_millis(12));
-        let began = Instant::now();
-        f.render(&mut c, WINDOW);
-        took.push(began.elapsed());
-    }
-    report("playing (mock core)", took);
     let _ = std::fs::remove_dir_all(&root);
 }

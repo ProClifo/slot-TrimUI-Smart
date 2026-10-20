@@ -163,6 +163,13 @@ pub fn run() {
             frontend.poweroff();
             return;
         }
+        if frontend.handing_off() {
+            match frontend.hand_off() {
+                Ok(()) => eprintln!("slot: handing the cart to MinUI's emulator"),
+                Err(e) => eprintln!("slot: handoff: {e}"),
+            }
+            return;
+        }
         frontend.step_emulator(pacer.period, STEP_TIMEOUT);
         frontend.render(&mut compositor, window);
         let swap = Instant::now();

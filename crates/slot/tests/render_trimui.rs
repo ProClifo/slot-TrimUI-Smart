@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use common::{clocked, tmp_root_with_carts};
 use slot::frontend::Frontend;
 use slot_gfx::soft::{shared_frame, Compositor, SharedFrame};
-use slot_input::{Btn, InputSource, Millis, RawEvent};
+use slot_input::{InputSource, Millis, RawEvent};
 use slot_power::SimPlatform;
 
 const PANEL: (u32, u32) = (240, 320);
@@ -100,35 +100,4 @@ fn the_shelf_fills_the_turned_panel() {
     let mb = c.texture_bytes() as f64 / (1 << 20) as f64;
     eprintln!("textures after the shelf: {mb:.1} MB");
     assert!(mb < 24.0, "the shelf's textures take {mb:.1} MB of 128");
-}
-
-#[test]
-fn a_cart_plays_into_the_sp_frame() {
-    let (mut c, frame) = smart();
-    let d = tmp_root_with_carts(&["Emerald"]);
-    clocked(d.path());
-    let mut f = Frontend::boot(Box::new(SimPlatform::at(d.path().to_path_buf())));
-    f.upload_faces(&mut c);
-    f.upload_bezel(&mut c, WINDOW);
-    let mut steps: VecDeque<Vec<RawEvent>> = VecDeque::new();
-    for _ in 0..20 {
-        steps.push_back(Vec::new());
-    }
-    steps.push_back(vec![RawEvent::Down(Btn::A)]);
-    steps.push_back(vec![RawEvent::Up(Btn::A)]);
-    let mut input = Script(steps);
-    for _ in 0..400 {
-        f.advance(&mut input);
-        f.drive_emulator();
-        f.step_emulator(
-            std::time::Duration::from_micros(16_742),
-            std::time::Duration::from_millis(12),
-        );
-        f.render(&mut c, WINDOW);
-    }
-    let up = shot(&mut f, &mut c, &frame, "trimui-playing");
-    assert!(lit(&up) > 20_000, "nothing is playing: {} lit", lit(&up));
-    let mb = c.texture_bytes() as f64 / (1 << 20) as f64;
-    eprintln!("textures after playing: {mb:.1} MB");
-    assert!(mb < 24.0, "the textures take {mb:.1} MB of 128");
 }

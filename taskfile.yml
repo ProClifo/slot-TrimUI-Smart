@@ -100,6 +100,7 @@ tasks:
       - sh card/test-coresave.sh
       - sh card/test-launch.sh
       - sh card/test-repair.sh
+      - sh card/test-trimui-launch.sh
 
   core:
     desc: >-

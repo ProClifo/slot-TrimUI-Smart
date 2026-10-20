@@ -34,6 +34,9 @@ const WIFI_MODULE: &str = "8821cs";
 
 const KERNEL_LINES: usize = 40;
 
+#[cfg(feature = "trimui")]
+const POWEROFF_FLAG: &str = "/tmp/poweroff";
+
 pub fn uptime_seconds(s: &str) -> Option<String> {
     let first = s.split_whitespace().next()?;
     if !first.chars().all(|c| c.is_ascii_digit() || c == '.') {
@@ -639,6 +642,19 @@ impl Platform for DevicePlatform {
         take_repair_result(Path::new(REPAIR_RESULT))
     }
 
+    /// The TrimUI Smart's power is a switch software cannot throw. As MinUI does, slot leaves
+    /// /tmp/poweroff and exits, and the boot script asks for the switch while the LEDs blink.
+    #[cfg(feature = "trimui")]
+    fn poweroff(&mut self) -> ! {
+        self.breadcrumb("poweroff: reached slot, leaving the switch to the boot script");
+        let _ = Command::new("sync").status();
+        if let Err(e) = fs::write(POWEROFF_FLAG, b"") {
+            eprintln!("slot: {POWEROFF_FLAG}: {e}");
+        }
+        std::process::exit(0)
+    }
+
+    #[cfg(not(feature = "trimui"))]
     fn poweroff(&mut self) -> ! {
         self.breadcrumb("poweroff: reached slot, unloading the WiFi driver");
         let _ = Command::new("rmmod").arg(WIFI_MODULE).status();

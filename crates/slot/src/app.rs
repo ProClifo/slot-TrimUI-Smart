@@ -670,6 +670,15 @@ impl App {
         };
         self.phase = Phase::Shelf;
         match seated {
+            // MinUI's emulator plays the Smart's carts and its boot script resumes them, so slot
+            // opens on the shelf with the cart picked out rather than putting it back in.
+            Some((at, i)) if cfg!(feature = "trimui") => {
+                self.shelf_at = at;
+                self.shelf_mut().select(i);
+                self.state.cart = None;
+                self.state.cart_platform = None;
+                self.name_pending = true;
+            }
             Some((at, i)) => {
                 self.shelf_at = at;
                 self.shelf_mut().select(i);
@@ -3222,6 +3231,11 @@ impl App {
         if self.panel_lit() && self.screen > 0.0 {
             out.push(Draw::Game);
         }
+    }
+
+    /// The cart has gone all the way into the slot.
+    pub fn inserted(&self) -> bool {
+        matches!(self.phase, Phase::Inserting { t, .. } if t >= INSERT_S)
     }
 
     fn powering_up(&self) -> bool {
