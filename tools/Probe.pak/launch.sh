@@ -2,9 +2,12 @@
 # Collects what a slot port to the TrimUI Smart needs to know and that a spec sheet does not say:
 # the libc and loader, the framebuffer's format and paging, the input devices and the code
 # behind each button, the sound card, the battery and LED nodes, and the stock launcher.
-# Run it on the device. It writes one text file beside itself and changes nothing else.
+# It is a MinUI pak: copy Probe.pak to /Tools/trimui/ on the card and open it from Tools. It writes
+# its findings beside itself and changes nothing else.
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+exec > "$HERE/probe-log.txt" 2>&1
+set -x
 SERIAL="$(grep -i '^Serial' /proc/cpuinfo 2>/dev/null | awk '{print $NF}')"
 [ -n "$SERIAL" ] || SERIAL="$(cat /sys/class/sunxi_info/sys_info 2>/dev/null | grep -i chipid | awk '{print $NF}')"
 [ -n "$SERIAL" ] || SERIAL="unknown"
