@@ -110,6 +110,12 @@ unsafe fn registers(ctx: *mut c_void) -> (usize, Option<usize>) {
     (mc.pc as usize, Some(mc.regs[30] as usize))
 }
 
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+unsafe fn registers(ctx: *mut c_void) -> (usize, Option<usize>) {
+    let mc = &(*(ctx as *mut libc::ucontext_t)).uc_mcontext;
+    (mc.arm_pc as usize, Some(mc.arm_lr as usize))
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 unsafe fn registers(ctx: *mut c_void) -> (usize, Option<usize>) {
     let mc = &(*(ctx as *mut libc::ucontext_t)).uc_mcontext;

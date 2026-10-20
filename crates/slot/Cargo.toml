@@ -9,6 +9,8 @@ license.workspace = true
 default = ["host"]
 host = ["dep:winit", "dep:cpal", "dep:gilrs", "slot-gfx/host"]
 device = ["slot-gfx/device"]
+# The TrimUI Smart: no GPU, so frames are drawn on the CPU into /dev/fb0.
+trimui = ["device", "slot-gfx/soft"]
 
 [dependencies]
 slot-gfx = { path = "../slot-gfx", default-features = false }

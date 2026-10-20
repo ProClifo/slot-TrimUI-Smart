@@ -3,7 +3,7 @@ use crate::shaders::{SPRITE_FRAG, SPRITE_VERT};
 use crate::surface::{GfxError, OUT_H, OUT_W};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct TexId(usize);
+pub struct TexId(pub(crate) usize);
 
 #[cfg(feature = "test-support")]
 impl TexId {

@@ -17,6 +17,8 @@
 /.idea/
 /target-device
 /target-verify
+/target-trimui
+/dist-trimui
 /dist-device
 
 # Parallel implementation worktrees, never content.
