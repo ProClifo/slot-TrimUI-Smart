@@ -76,7 +76,11 @@ fn main() {
 
     let mut scroll: VecDeque<Vec<RawEvent>> = VecDeque::new();
     for i in 0..FRAMES {
-        let btn = if (i / 40) % 2 == 0 { Btn::Right } else { Btn::Left };
+        let btn = if (i / 40) % 2 == 0 {
+            Btn::Right
+        } else {
+            Btn::Left
+        };
         scroll.push_back(match i % 20 {
             0 => vec![RawEvent::Down(btn)],
             1 => vec![RawEvent::Up(btn)],
