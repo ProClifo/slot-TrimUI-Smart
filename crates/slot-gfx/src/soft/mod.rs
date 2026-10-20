@@ -39,10 +39,11 @@ pub fn shared_frame(w: u32, h: u32) -> SharedFrame {
     }))
 }
 
+/// Texels packed as 0xAARRGGBB, straight alpha, so a blend works on whole words.
 struct Texture {
     w: u32,
     h: u32,
-    rgba: Vec<u8>,
+    px: Vec<u32>,
     nearest: bool,
 }
 
@@ -55,7 +56,8 @@ struct Viewport {
 }
 
 struct Game {
-    rgba: Vec<u8>,
+    /// The core's frame as 0x00RRGGBB.
+    px: Vec<u32>,
     paper_size: f32,
     effect: ScreenEffect,
     power: f32,
@@ -131,7 +133,7 @@ impl Compositor {
             shake: 0.0,
             window: (OUT_W, OUT_H),
             game: Game {
-                rgba: vec![0; (SRC_W * SRC_H * 4) as usize],
+                px: vec![0; (SRC_W * SRC_H) as usize],
                 paper_size: 1.0,
                 effect: ScreenEffect::Lcd3x,
                 power: 1.0,
@@ -156,7 +158,9 @@ impl Compositor {
     pub fn upload_game(&mut self, xrgb8888: &[u8]) {
         let n = (SRC_W * SRC_H * 4) as usize;
         if xrgb8888.len() >= n {
-            self.game.rgba.copy_from_slice(&xrgb8888[..n]);
+            for (o, p) in self.game.px.iter_mut().zip(xrgb8888.chunks_exact(4)) {
+                *o = u32::from_le_bytes([p[0], p[1], p[2], 0]);
+            }
         }
     }
 
@@ -215,39 +219,36 @@ impl Compositor {
             return Texture {
                 w: 1,
                 h: 1,
-                rgba: vec![0; 4],
+                px: vec![0],
                 nearest,
             };
         }
+        let px: Vec<u32> = rgba[..n]
+            .chunks_exact(4)
+            .map(|p| u32::from_le_bytes([p[2], p[1], p[0], p[3]]))
+            .collect();
         if nearest || self.shrink == 1 || w < 2 || h < 2 {
-            return Texture {
-                w,
-                h,
-                rgba: rgba[..n].to_vec(),
-                nearest,
-            };
+            return Texture { w, h, px, nearest };
         }
         let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
-        let mut half = vec![0u8; (hw * hh * 4) as usize];
+        let mut half = vec![0u32; (hw * hh) as usize];
+        let at = |x: u32, y: u32| px[(y * w + x) as usize];
         for y in 0..hh {
             let (y0, y1) = ((2 * y).min(h - 1), (2 * y + 1).min(h - 1));
             for x in 0..hw {
                 let (x0, x1) = ((2 * x).min(w - 1), (2 * x + 1).min(w - 1));
-                let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
-                let o = ((y * hw + x) * 4) as usize;
-                for c in 0..4 {
-                    let sum = rgba[at(x0, y0) + c] as u32
-                        + rgba[at(x1, y0) + c] as u32
-                        + rgba[at(x0, y1) + c] as u32
-                        + rgba[at(x1, y1) + c] as u32;
-                    half[o + c] = ((sum + 2) / 4) as u8;
-                }
+                let quad = [at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1)];
+                let mean = |shift: u32| {
+                    let sum: u32 = quad.iter().map(|p| (p >> shift) & 0xff).sum();
+                    ((sum + 2) / 4) << shift
+                };
+                half[(y * hw + x) as usize] = mean(24) | mean(16) | mean(8) | mean(0);
             }
         }
         Texture {
             w: hw,
             h: hh,
-            rgba: half,
+            px: half,
             nearest,
         }
     }
@@ -328,7 +329,7 @@ impl Compositor {
 
     /// The memory the textures hold, which the TrimUI Smart's 128 MB has to find room for.
     pub fn texture_bytes(&self) -> usize {
-        self.textures.iter().map(|t| t.rgba.len()).sum()
+        self.textures.iter().map(|t| t.px.len() * 4).sum()
     }
 
     pub fn read_frame(&self) -> Vec<u8> {
@@ -362,6 +363,13 @@ impl Compositor {
             return;
         };
         let (panel, ccw) = (turn.panel, turn.ccw);
+        if self.native() && self.size == window && panel == (window.1, window.0) {
+            frame.w = panel.0;
+            frame.h = panel.1;
+            frame.px.resize((panel.0 * panel.1) as usize, 0);
+            self.turn_native(window, &mut frame.px, ccw);
+            return;
+        }
         let mut img = std::mem::take(&mut self.scratch);
         img.resize((window.0 * window.1) as usize, 0);
         self.output(window, &mut img);
@@ -372,17 +380,38 @@ impl Compositor {
         self.scratch = img;
     }
 
+    /// The blit and the turn in one pass, for the usual case of a canvas the size of the
+    /// window: each panel pixel reads the canvas pixel the turn lands on it, warmed and shaken.
+    fn turn_native(&self, window: (u32, u32), out: &mut [u32], ccw: bool) {
+        let (w, h) = (window.0 as usize, window.1 as usize);
+        let canvas = Canvas::of(window);
+        let dx = (self.shake * window.0 as f32 / canvas.w).round() as isize;
+        let warm = Warm::new(self.gain);
+        for (py, line) in out.chunks_exact_mut(h).enumerate() {
+            let ix = match ccw {
+                false => py,
+                true => w - 1 - py,
+            } as isize
+                - dx;
+            if ix < 0 || ix >= w as isize {
+                line.fill(0);
+                continue;
+            }
+            let column = &self.canvas[ix as usize..];
+            for (px, o) in line.iter_mut().enumerate() {
+                let iy = match ccw {
+                    false => h - 1 - px,
+                    true => px,
+                };
+                *o = warm.apply(column[iy * w]);
+            }
+        }
+    }
+
     fn output(&self, window: (u32, u32), out: &mut [u32]) {
         out.fill(0);
-        let gain = self
-            .gain
-            .map(|g| (g.clamp(0.0, 1.0) * 256.0).round() as u32);
-        let warm = |p: u32| -> u32 {
-            let r = (((p >> 16) & 0xff) * gain[0]) >> 8;
-            let g = (((p >> 8) & 0xff) * gain[1]) >> 8;
-            let b = ((p & 0xff) * gain[2]) >> 8;
-            (r << 16) | (g << 8) | b
-        };
+        let warm = Warm::new(self.gain);
+        let warm = |p: u32| warm.apply(p);
         let (cw, ch) = self.size;
         let (x, y, w, h) = match self.native() {
             true => {
@@ -398,12 +427,16 @@ impl Compositor {
         if w <= 0 || h <= 0 {
             return;
         }
+        let cols = x.max(0)..(x + w).min(window.0 as i32);
+        let xs: Vec<usize> = cols
+            .clone()
+            .map(|ox| ((ox - x) as i64 * cw as i64 / w as i64) as usize)
+            .collect();
         for oy in y.max(0)..(y + h).min(window.1 as i32) {
             let sy = ((oy - y) as i64 * ch as i64 / h as i64) as u32;
             let row = &self.canvas[(sy * cw) as usize..][..cw as usize];
             let line = &mut out[(oy as u32 * window.0) as usize..][..window.0 as usize];
-            for ox in x.max(0)..(x + w).min(window.0 as i32) {
-                let sx = ((ox - x) as i64 * cw as i64 / w as i64) as usize;
+            for (ox, &sx) in cols.clone().zip(&xs) {
                 line[ox as usize] = warm(row[sx]);
             }
         }
@@ -518,12 +551,12 @@ impl Compositor {
             src[3] *= (OUT_H as f32 - self.game.bottom) / OUT_H as f32;
         }
         let bright = (self.game.bright() * 256.0).round() as u32;
-        let (pixels, tw, th, bgra): (&[u8], u32, u32, bool) = match still {
+        let (pixels, tw, th): (&[u32], u32, u32) = match still {
             Some(id) => {
                 let t = &self.textures[id.0];
-                (&t.rgba, t.w, t.h, false)
+                (&t.px, t.w, t.h)
             }
-            None => (&self.game.rgba, SRC_W, SRC_H, true),
+            None => (&self.game.px, SRC_W, SRC_H),
         };
         let place = Place::new(vp, Canvas::FRAMED, [x, y, w, h]);
         let Some((cols, rows)) = place.span(self.size) else {
@@ -534,18 +567,26 @@ impl Compositor {
             .map(|i| nearest(src[0] + place.a_x(i) * src[2], tw))
             .collect();
         let stride = self.size.0 as usize;
+        let lift = |p: u32| -> u32 {
+            let c = |shift: u32| ((((p >> shift) & 0xff) * bright) >> 8).min(255) << shift;
+            c(16) | c(8) | c(0)
+        };
         for j in rows {
             let ty = nearest(src[1] + place.a_y(j) * src[3], th);
-            let row = &pixels[ty * tw as usize * 4..][..tw as usize * 4];
-            let line = &mut self.canvas[j as usize * stride..][..stride];
-            for (i, &tx) in cols.clone().zip(&xs) {
-                let p = &row[tx * 4..tx * 4 + 4];
-                let (r, g, b) = match bgra {
-                    true => (p[2], p[1], p[0]),
-                    false => (p[0], p[1], p[2]),
-                };
-                let lift = |c: u8| ((c as u32 * bright) >> 8).min(255);
-                line[i as usize] = (lift(r) << 16) | (lift(g) << 8) | lift(b);
+            let row = &pixels[ty * tw as usize..][..tw as usize];
+            let line =
+                &mut self.canvas[j as usize * stride..][cols.start as usize..cols.end as usize];
+            match bright {
+                256 => {
+                    for (o, &tx) in line.iter_mut().zip(&xs) {
+                        *o = row[tx] & 0xff_ffff;
+                    }
+                }
+                _ => {
+                    for (o, &tx) in line.iter_mut().zip(&xs) {
+                        *o = lift(row[tx]);
+                    }
+                }
             }
         }
     }
@@ -629,22 +670,78 @@ fn tap(u: f32, len: u32, nearest_only: bool) -> Tap {
     }
 }
 
-fn sample(tex: &Texture, x: Tap, y: Tap) -> [u32; 4] {
-    let at = |tx: usize, ty: usize| {
-        let o = (ty * tex.w as usize + tx) * 4;
-        let p = &tex.rgba[o..o + 4];
-        [p[0] as u32, p[1] as u32, p[2] as u32, p[3] as u32]
-    };
-    let mix = |p: [u32; 4], q: [u32; 4], t: u32| -> [u32; 4] {
-        match t {
-            0 => p,
-            _ => std::array::from_fn(|c| (p[c] * (256 - t) + q[c] * t + 128) >> 8),
+/// The blue-light warmth as per-channel multipliers out of 256, or none at all.
+struct Warm {
+    gain: Option<[u32; 3]>,
+}
+
+impl Warm {
+    fn new(gain: [f32; 3]) -> Self {
+        let gain = gain.map(|g| (g.clamp(0.0, 1.0) * 256.0).round() as u32);
+        Warm {
+            gain: (gain != [256; 3]).then_some(gain),
         }
-    };
-    let top = mix(at(x.a, y.a), at(x.b, y.a), x.t);
+    }
+
+    #[inline(always)]
+    fn apply(&self, p: u32) -> u32 {
+        let Some(k) = self.gain else {
+            return p;
+        };
+        let r = (((p >> 16) & 0xff) * k[0]) >> 8;
+        let g = (((p >> 8) & 0xff) * k[1]) >> 8;
+        let b = ((p & 0xff) * k[2]) >> 8;
+        (r << 16) | (g << 8) | b
+    }
+}
+
+/// `p` toward `q` by `t` out of 256, all four channels at once.
+#[inline(always)]
+fn lerp(p: u32, q: u32, t: u32) -> u32 {
+    if t == 0 {
+        return p;
+    }
+    let s = 256 - t;
+    let rb = (((p & 0xff00ff) * s + (q & 0xff00ff) * t) >> 8) & 0xff00ff;
+    let ag = (((p >> 8) & 0xff00ff) * s + ((q >> 8) & 0xff00ff) * t) & 0xff00ff00;
+    rb | ag
+}
+
+#[inline(always)]
+fn sample(tex: &Texture, x: Tap, y: Tap) -> u32 {
+    let w = tex.w as usize;
+    let at = |tx: usize, ty: usize| tex.px[ty * w + tx];
+    let top = lerp(at(x.a, y.a), at(x.b, y.a), x.t);
     match y.t {
         0 => top,
-        _ => mix(top, mix(at(x.a, y.b), at(x.b, y.b), x.t), y.t),
+        t => lerp(top, lerp(at(x.a, y.b), at(x.b, y.b), x.t), t),
+    }
+}
+
+/// Blends the colour of `src` over `dst` at alpha `a` out of 255, as SRC_ALPHA,
+/// ONE_MINUS_SRC_ALPHA does, two channels to a multiply.
+#[inline(always)]
+fn over(dst: u32, src: u32, a: u32) -> u32 {
+    match a {
+        0 => dst,
+        255.. => src & 0xff_ffff,
+        _ => {
+            let ia = 255 - a;
+            let rb = (src & 0xff00ff) * a + (dst & 0xff00ff) * ia + 0x0080_0080;
+            let g = (src & 0xff00) * a + (dst & 0xff00) * ia + 0x8000;
+            let rb = ((rb + ((rb >> 8) & 0xff00ff)) >> 8) & 0xff00ff;
+            let g = ((g + ((g >> 8) & 0xff00)) >> 8) & 0xff00;
+            rb | g
+        }
+    }
+}
+
+/// A texel's alpha once the draw's own alpha, out of 256, scales it.
+#[inline(always)]
+fn alpha_of(p: u32, k: u32) -> u32 {
+    match k {
+        256 => p >> 24,
+        _ => ((p >> 24) * k + 128) >> 8,
     }
 }
 
@@ -652,23 +749,10 @@ fn colour_factors(colour: [f32; 4]) -> [u32; 4] {
     colour.map(|c| (c.clamp(0.0, 1.0) * 256.0).round() as u32)
 }
 
-/// Blends `src` (straight alpha, 0..=255 per channel) over `dst`, as SRC_ALPHA,
-/// ONE_MINUS_SRC_ALPHA does.
-fn blend(dst: u32, src: [u32; 4]) -> u32 {
-    let a = src[3].min(255);
-    if a == 0 {
-        return dst;
-    }
-    let d = [(dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff];
-    let c: [u32; 3] = std::array::from_fn(|i| {
-        let v = src[i].min(255) * a + d[i] * (255 - a) + 127;
-        (v + (v >> 8)) >> 8
-    });
-    (c[0] << 16) | (c[1] << 8) | c[2]
-}
-
-fn tinted(p: [u32; 4], k: [u32; 4]) -> [u32; 4] {
-    std::array::from_fn(|c| (p[c] * k[c] + 128) >> 8)
+/// A flat colour's texel: white scaled by the colour, with its alpha out of 255.
+fn flat(k: [u32; 4]) -> u32 {
+    let c = |i: usize| (255 * k[i]) >> 8;
+    (c(3) << 24) | (c(0) << 16) | (c(1) << 8) | c(2)
 }
 
 fn sprite(
@@ -684,31 +768,47 @@ fn sprite(
     };
     let k = colour_factors(colour);
     let stride = size.0 as usize;
+    let span = cols.start as usize..cols.end as usize;
     let Some(tex) = tex else {
-        let src = [
-            (255 * k[0]) >> 8,
-            (255 * k[1]) >> 8,
-            (255 * k[2]) >> 8,
-            (255 * k[3]) >> 8,
-        ];
+        let src = flat(k);
+        let a = src >> 24;
         for j in rows {
-            let line = &mut canvas[j as usize * stride..][..stride];
-            for px in &mut line[cols.start as usize..cols.end as usize] {
-                *px = blend(*px, src);
+            for px in &mut canvas[j as usize * stride..][span.clone()] {
+                *px = over(*px, src, a);
             }
         }
         return;
     };
+    let ka = k[3];
     let xs: Vec<Tap> = cols
         .clone()
         .map(|i| tap(uv[0] + place.a_x(i) * uv[2], tex.w, tex.nearest))
         .collect();
+    // Texel for pixel, one column after the next: the shelf's art mostly lands like this once
+    // its textures are kept at the panel's scale, and then a row is a straight run of texels.
+    let unit = xs
+        .iter()
+        .enumerate()
+        .all(|(n, x)| x.t == 0 && x.a == xs[0].a + n);
+    let w = tex.w as usize;
     for j in rows {
         let ty = tap(uv[1] + place.a_y(j) * uv[3], tex.h, tex.nearest);
-        let line = &mut canvas[j as usize * stride..][..stride];
-        for (i, &tx) in cols.clone().zip(&xs) {
-            let px = &mut line[i as usize];
-            *px = blend(*px, tinted(sample(tex, tx, ty), k));
+        let line = &mut canvas[j as usize * stride..][span.clone()];
+        if unit && ty.t == 0 {
+            let run = &tex.px[ty.a * w + xs[0].a..][..line.len()];
+            for (d, &p) in line.iter_mut().zip(run) {
+                *d = over(*d, p, alpha_of(p, ka));
+            }
+            continue;
+        }
+        let (row_a, row_b) = (&tex.px[ty.a * w..][..w], &tex.px[ty.b * w..][..w]);
+        for (d, x) in line.iter_mut().zip(&xs) {
+            let top = lerp(row_a[x.a], row_a[x.b], x.t);
+            let p = match ty.t {
+                0 => top,
+                t => lerp(top, lerp(row_b[x.a], row_b[x.b], x.t), t),
+            };
+            *d = over(*d, p, alpha_of(p, ka));
         }
     }
 }
@@ -760,15 +860,12 @@ fn sprite_turned(
             if !(0.0..=1.0).contains(&ax) || !(0.0..=1.0).contains(&ay) {
                 continue;
             }
-            let src = match tex {
-                Some(t) => tinted(
-                    sample(t, tap(ax, t.w, t.nearest), tap(ay, t.h, t.nearest)),
-                    k,
-                ),
-                None => tinted([255; 4], k),
+            let p = match tex {
+                Some(t) => sample(t, tap(ax, t.w, t.nearest), tap(ay, t.h, t.nearest)),
+                None => flat([k[0], k[1], k[2], 256]),
             };
-            let p = &mut line[i as usize];
-            *p = blend(*p, src);
+            let d = &mut line[i as usize];
+            *d = over(*d, p, alpha_of(p, k[3]));
         }
     }
 }

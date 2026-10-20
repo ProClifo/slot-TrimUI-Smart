@@ -1,2 +1,7 @@
 [env]
 SLOT_SILENT = "1"
+
+# The TrimUI Smart's Cortex-A7. The target's own default is a plain ARMv7 with no NEON, which
+# leaves the soft compositor's pixel loops and the resampler unvectorised.
+[target.armv7-unknown-linux-gnueabihf]
+rustflags = ["-C", "target-cpu=cortex-a7"]

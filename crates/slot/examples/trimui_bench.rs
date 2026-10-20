@@ -1,6 +1,7 @@
 //! Times the soft compositor drawing slot's shelf and a running cart at the TrimUI Smart's 320x240,
 //! with no panel: the frames go to memory. Run it on the device to see what drawing alone costs.
-//! It boots on a scratch root under /tmp with a few blank carts and writes nothing anywhere else.
+//! It boots on a scratch root under /tmp with a few blank carts, writes nothing anywhere else and
+//! plays no sound.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -56,7 +57,8 @@ fn main() {
     let frame = shared_frame(PANEL.0, PANEL.1);
     let mut c = Compositor::with_frame(frame);
     c.set_panel_turn(PANEL, true).unwrap();
-    let mut f = Frontend::boot(Box::new(SimPlatform::at(PathBuf::from(&root))));
+    let platform = Box::new(SimPlatform::at(PathBuf::from(&root)));
+    let mut f = Frontend::boot_with(platform, Box::new(slot::audio::StubSink::draining()));
     f.upload_faces(&mut c);
     f.upload_bezel(&mut c, WINDOW);
 

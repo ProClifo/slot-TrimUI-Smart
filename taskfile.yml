@@ -450,6 +450,28 @@ tasks:
         cargo clippy --target armv7-unknown-linux-gnueabihf --target-dir target-trimui
         -p slot --no-default-features --features trimui -- -D warnings
 
+  bench:trimui:
+    desc: >-
+      Build Bench.pak, which times the soft compositor and both cores on a TrimUI Smart, into
+      OUT/Tools/trimuismart. It reads slot's own games and cores off the card and never ships
+    vars:
+      OUT: '{{.OUT | default "dist-trimui"}}'
+    cmds:
+      - >-
+        cargo zigbuild --profile device --target armv7-unknown-linux-gnueabihf.2.23
+        --target-dir target-trimui -p slot --no-default-features --features trimui
+        --example trimui_bench
+      - >-
+        cargo zigbuild --profile device --target armv7-unknown-linux-gnueabihf.2.23
+        --target-dir target-trimui -p slot-retro --example core_bench
+      - mkdir -p {{.OUT}}/Tools/trimuismart
+      - cp -R card/trimui/Bench.pak {{.OUT}}/Tools/trimuismart/
+      - >-
+        cp target-trimui/armv7-unknown-linux-gnueabihf/device/examples/trimui_bench
+        target-trimui/armv7-unknown-linux-gnueabihf/device/examples/core_bench
+        {{.OUT}}/Tools/trimuismart/Bench.pak/
+      - 'echo "Bench.pak ready in {{.OUT}}/Tools/trimuismart"'
+
   dist:trimui:
     desc: >-
       Build the SD card tree for a TrimUI Smart running MinUI, OUT defaults to ./dist-trimui.

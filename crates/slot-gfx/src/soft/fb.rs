@@ -211,6 +211,7 @@ impl FbdevSurface {
         }
         let base = self.stride * h * page as usize;
         let (r, g, b) = (self.var.red, self.var.green, self.var.blue);
+        let rgb565 = [r, g, b].map(|f| (f.offset, f.length)) == [(11, 5), (5, 6), (0, 5)];
         for y in 0..h {
             let src = &frame.px[y * w..][..w];
             let at = base + y * self.stride;
@@ -218,8 +219,20 @@ impl FbdevSurface {
                 16 => {
                     let line =
                         unsafe { std::slice::from_raw_parts_mut(self.map.add(at) as *mut u16, w) };
-                    for (o, &p) in line.iter_mut().zip(src) {
-                        *o = pack(p, r, g, b) as u16;
+                    match rgb565 {
+                        true => {
+                            for (o, &p) in line.iter_mut().zip(src) {
+                                *o = (((p >> 8) & 0xf800)
+                                    | ((p >> 5) & 0x07e0)
+                                    | ((p >> 3) & 0x001f))
+                                    as u16;
+                            }
+                        }
+                        false => {
+                            for (o, &p) in line.iter_mut().zip(src) {
+                                *o = pack(p, r, g, b) as u16;
+                            }
+                        }
                     }
                 }
                 _ => {
@@ -322,5 +335,30 @@ impl Surface for FbdevSurface {
 impl Drop for FbdevSurface {
     fn drop(&mut self) {
         unsafe { libc::munmap(self.map as *mut c_void, self.map_len) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pack, Bitfield};
+
+    fn field(offset: u32, length: u32) -> Bitfield {
+        Bitfield {
+            offset,
+            length,
+            msb_right: 0,
+        }
+    }
+
+    #[test]
+    fn the_rgb565_shortcut_packs_as_the_bitfields_do() {
+        let (r, g, b) = (field(11, 5), field(5, 6), field(0, 5));
+        for p in (0..=0xff_ffffu32)
+            .step_by(97)
+            .chain([0, 0xff_ffff, 0x80_8080])
+        {
+            let quick = ((p >> 8) & 0xf800) | ((p >> 5) & 0x07e0) | ((p >> 3) & 0x001f);
+            assert_eq!(quick, pack(p, r, g, b), "{p:06x}");
+        }
     }
 }
