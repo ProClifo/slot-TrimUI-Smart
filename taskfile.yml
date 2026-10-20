@@ -50,7 +50,7 @@ tasks:
       - cargo test -p slot-gfx --test pipeline
       - cargo test -p slot-ui --test render_row_edges
       - cargo test -p slot-retro --test options --test netpacket --test libretro
-      - cargo test -p slot --no-default-features --features trimui --test render_trimui
+      - cargo test -p slot --no-default-features --features trimui --test render_trimui --test trimui
 
   test:one:
     desc: Run tests matching FILTER, eg task test:one FILTER=gesture

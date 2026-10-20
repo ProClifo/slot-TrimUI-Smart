@@ -909,6 +909,9 @@ impl App {
         if !self.left_stick {
             hidden.push(QuickRow::LeftStick);
         }
+        if cfg!(feature = "trimui") {
+            hidden.extend([QuickRow::Rewind, QuickRow::ScRewind]);
+        }
         if !self.state.turbo {
             hidden.extend([QuickRow::GameTurboA, QuickRow::GameTurboB]);
         }
@@ -1252,6 +1255,9 @@ impl App {
         }
         if !self.left_stick {
             hidden.push(QuickRow::LeftStick);
+        }
+        if cfg!(feature = "trimui") {
+            hidden.extend([QuickRow::Rewind, QuickRow::ScRewind]);
         }
         if !self.state.turbo {
             hidden.extend([QuickRow::GameTurboA, QuickRow::GameTurboB]);
@@ -1869,8 +1875,10 @@ impl App {
         self.state.turbo
     }
 
+    /// The TrimUI Smart records nothing to rewind: a state every other frame costs its one core
+    /// more than the game does, and it has no L2 or R2 to hold for it.
     pub fn records_rewind(&self) -> bool {
-        self.state.rewind
+        self.state.rewind && !cfg!(feature = "trimui")
     }
 
     pub fn picture_rect(&self) -> [f32; 4] {

@@ -104,11 +104,14 @@ fn main() {
     play.push_back(vec![RawEvent::Up(Btn::A)]);
     let mut input = Script(play);
     let present = Duration::from_micros(16_742);
-    for _ in 0..240 {
+    // The cart goes in and its core opens on the clock, not per frame, so wait for it at 60 Hz.
+    for _ in 0..480 {
+        let began = Instant::now();
         f.advance(&mut input);
         f.drive_emulator();
         f.step_emulator(present, Duration::from_millis(12));
         f.render(&mut c, WINDOW);
+        std::thread::sleep(present.saturating_sub(began.elapsed()));
     }
     let mut took = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
