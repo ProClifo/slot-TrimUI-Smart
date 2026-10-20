@@ -30,3 +30,7 @@ png = { workspace = true }
 [dev-dependencies]
 slot-gfx = { path = "../slot-gfx", default-features = false, features = ["test-support"] }
 tempfile = { workspace = true }
+
+[[example]]
+name = "trimui_bench"
+required-features = ["trimui"]
