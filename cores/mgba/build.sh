@@ -19,6 +19,9 @@ stamp() {
 	echo "commit=$1"
 	echo "source=https://github.com/libretro/mgba/tree/$1"
 	echo "device_cflags=$device_cflags"
+	if [ -n "${MGBA_TOOLCHAIN:-}" ]; then
+		echo "toolchain=$(basename "$MGBA_TOOLCHAIN")"
+	fi
 	for p in "$here"/*.patch; do
 		echo "patch=$(basename "$p") sha256:$(sha256 "$p")"
 	done
@@ -54,7 +57,10 @@ build() {
 	if [ "$(uname -s)-$(uname -m)" = "Linux-aarch64" ]; then
 		cflags="$device_cflags"
 	fi
+	# MGBA_TOOLCHAIN names a CMake toolchain file to cross-compile with, as the TrimUI Smart's
+	# build does.
 	cmake -S "$src" -B "$obj" -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=ON -DCMAKE_BUILD_TYPE=Release \
+		${MGBA_TOOLCHAIN:+-DCMAKE_TOOLCHAIN_FILE="$MGBA_TOOLCHAIN"} \
 		-DCMAKE_C_FLAGS="$cflags" >/dev/null
 	cmake --build "$obj" --target mgba_libretro --parallel "$(getconf _NPROCESSORS_ONLN)" >/dev/null
 

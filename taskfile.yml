@@ -50,6 +50,7 @@ tasks:
       - cargo test -p slot-gfx --test pipeline
       - cargo test -p slot-ui --test render_row_edges
       - cargo test -p slot-retro --test options --test netpacket --test libretro
+      - cargo test -p slot --no-default-features --features trimui --test render_trimui
 
   test:one:
     desc: Run tests matching FILTER, eg task test:one FILTER=gesture
@@ -86,6 +87,7 @@ tasks:
       - task: fmt:check
       - task: lint
       - task: lint:device
+      - task: lint:trimui
       - task: test
       - task: test:card
 
@@ -377,6 +379,112 @@ tasks:
         done
       - 'echo "device tree ready at {{.OUT}}, copy its contents to SD2"'
 
+  setup:trimui:
+    desc: >-
+      Install what the TrimUI Smart build needs: the armv7 Rust target, zig (from PyPI, run as
+      python3 -m ziglang) and cargo-zigbuild, which links against the glibc 2.23 on its firmware
+    cmds:
+      - rustup target add armv7-unknown-linux-gnueabihf
+      - python3 -m pip install --user ziglang
+      - cargo install cargo-zigbuild --locked
+
+  core:trimui:
+    desc: Build mGBA and gpSP for the TrimUI Smart, a 32-bit Cortex-A7, with zig
+    cmds:
+      - task: core:trimui:mgba
+      - task: core:trimui:gpsp
+
+  core:trimui:mgba:
+    desc: Build the armv7 mGBA core for the TrimUI Smart from the pinned commit and cores/mgba's patches
+    env:
+      MGBA_TOOLCHAIN: '{{.ROOT_DIR}}/tools/trimui/arm.cmake'
+    status:
+      - test -f vendor/trimui/mgba_libretro.so
+      - test "$(cat vendor/trimui/mgba_libretro.so.meta 2>/dev/null)" = "$(sh cores/mgba/build.sh stamp {{.MGBA_COMMIT}})"
+    cmds:
+      - sh cores/mgba/build.sh build {{.MGBA_COMMIT}} target-trimui/mgba vendor/trimui/mgba_libretro.so
+      - file vendor/trimui/mgba_libretro.so | grep -q 'ELF 32-bit.*ARM'
+      - 'echo "built vendor/trimui/mgba_libretro.so"'
+
+  core:trimui:gpsp:
+    desc: >-
+      Build the armv7 gpSP core for the TrimUI Smart from the same pinned source archive the H700
+      build ships as its GPL-2.0 corresponding source
+    env:
+      GPSP_PLATFORM: armv7-neon-hardfloat
+      GPSP_CFLAGS: ''
+      CC: '{{.ROOT_DIR}}/tools/trimui/cc'
+    status:
+      - test -f vendor/trimui/gpsp_libretro.so
+      - test "$(cat vendor/trimui/gpsp_libretro.so.meta 2>/dev/null)" = "$(sh cores/gpsp/build.sh stamp {{.GPSP_COMMIT}})"
+    cmds:
+      - |
+        set -euo pipefail
+        if [ "$(cat vendor/gpsp-src.sha 2>/dev/null)" != "{{.GPSP_COMMIT}}" ] || [ ! -f vendor/gpsp-src.tar.gz ]; then
+          mkdir -p vendor
+          curl -fsSL -o vendor/gpsp-src.tar.gz \
+            "https://github.com/libretro/gpsp/archive/{{.GPSP_COMMIT}}.tar.gz"
+          tar -tzf vendor/gpsp-src.tar.gz | grep "^gpsp-{{.GPSP_COMMIT}}/Makefile$" > /dev/null
+          echo "{{.GPSP_COMMIT}}" > vendor/gpsp-src.sha
+        fi
+      - >-
+        sh cores/gpsp/build.sh build {{.GPSP_COMMIT}} vendor/gpsp-src.tar.gz
+        target-trimui/gpsp vendor/trimui/gpsp_libretro.so
+      - file vendor/trimui/gpsp_libretro.so | grep -q 'ELF 32-bit.*ARM'
+      - 'echo "built vendor/trimui/gpsp_libretro.so"'
+
+  build:trimui:
+    desc: Build slot for the TrimUI Smart, which draws on the CPU into /dev/fb0
+    cmds:
+      - >-
+        cargo zigbuild --profile device --target armv7-unknown-linux-gnueabihf.2.23
+        --target-dir target-trimui -p slot --no-default-features --features trimui
+      - file target-trimui/armv7-unknown-linux-gnueabihf/device/slot | grep -q 'ELF 32-bit.*ARM'
+      - 'echo "built target-trimui/armv7-unknown-linux-gnueabihf/device/slot"'
+
+  lint:trimui:
+    desc: Clippy the TrimUI Smart build, which neither the host nor the H700 lint compiles
+    cmds:
+      - >-
+        cargo clippy --target armv7-unknown-linux-gnueabihf --target-dir target-trimui
+        -p slot --no-default-features --features trimui -- -D warnings
+
+  dist:trimui:
+    desc: >-
+      Build the SD card tree for a TrimUI Smart running MinUI, OUT defaults to ./dist-trimui.
+      Copy its contents to the root of the card: slot opens from Tools and keeps its own
+      folders in /slot
+    deps: [build, core:trimui, build:trimui]
+    vars:
+      OUT: '{{.OUT | default "dist-trimui"}}'
+    cmds:
+      - rm -rf {{.OUT}}
+      - ./target/debug/slot --init-root {{.OUT}}/slot
+      - for d in Bezels Labels Wallpapers; do cp card/$d/README.txt {{.OUT}}/slot/$d/; done
+      - cp target-trimui/armv7-unknown-linux-gnueabihf/device/slot {{.OUT}}/slot/System/slot
+      - cp -R card/System/bezels {{.OUT}}/slot/System/
+      - cp vendor/trimui/mgba_libretro.so vendor/trimui/gpsp_libretro.so {{.OUT}}/slot/System/
+      - mkdir -p {{.OUT}}/Tools/trimuismart
+      - cp -R card/trimui/slot.pak {{.OUT}}/Tools/trimuismart/
+      - cp -r licenses {{.OUT}}/slot/System/licenses
+      - rm -f {{.OUT}}/slot/System/licenses/exfatprogs-GPL-2.0.txt
+      - |
+        set -euo pipefail
+        sha="$(cat vendor/gpsp-src.sha)"
+        cp vendor/gpsp-src.tar.gz "{{.OUT}}/slot/System/licenses/gpsp-${sha}.tar.gz"
+        cp vendor/trimui/gpsp_libretro.so.meta "{{.OUT}}/slot/System/licenses/gpsp-${sha}.meta"
+        for p in cores/gpsp/*.patch; do
+          cp "$p" "{{.OUT}}/slot/System/licenses/gpsp-$(basename "$p")"
+        done
+      - |
+        set -euo pipefail
+        commit="$(grep '^commit=' vendor/trimui/mgba_libretro.so.meta | cut -d= -f2)"
+        cp vendor/trimui/mgba_libretro.so.meta "{{.OUT}}/slot/System/licenses/mgba-${commit}.meta"
+        for p in cores/mgba/*.patch; do
+          cp "$p" "{{.OUT}}/slot/System/licenses/mgba-$(basename "$p")"
+        done
+      - 'echo "TrimUI Smart tree ready at {{.OUT}}, copy its contents to the root of the card"'
+
   deploy:device:
     desc: Build and push onto a device over adb, then restart it. SD defaults to /mnt/sdcard
     deps: [core:device, core:gpsp, fsck:exfat, build:device]
@@ -445,4 +553,4 @@ tasks:
     desc: Remove build output and dist
     cmds:
       - cargo clean
-      - rm -rf dist dist-device target-device
+      - rm -rf dist dist-device target-device dist-trimui target-trimui

@@ -326,6 +326,11 @@ impl Compositor {
         self.size
     }
 
+    /// The memory the textures hold, which the TrimUI Smart's 128 MB has to find room for.
+    pub fn texture_bytes(&self) -> usize {
+        self.textures.iter().map(|t| t.rgba.len()).sum()
+    }
+
     pub fn read_frame(&self) -> Vec<u8> {
         rgba_of(&self.canvas)
     }

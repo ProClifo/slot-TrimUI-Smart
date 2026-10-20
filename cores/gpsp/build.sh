@@ -3,7 +3,10 @@ set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
-device_cflags="-mcpu=cortex-a53"
+# The H700's recipe unless overridden: the TrimUI Smart builds with
+# GPSP_PLATFORM=armv7-neon-hardfloat, GPSP_CFLAGS= and CC set to its cross compiler.
+platform="${GPSP_PLATFORM:-arm64}"
+device_cflags="${GPSP_CFLAGS--mcpu=cortex-a53}"
 
 usage() {
 	echo "usage: $0 stamp COMMIT | build COMMIT TARBALL WORKDIR OUT" >&2
@@ -18,7 +21,7 @@ sha256() {
 stamp() {
 	echo "commit=$1"
 	echo "source=https://github.com/libretro/gpsp/archive/$1.tar.gz"
-	echo "recipe=make platform=arm64"
+	echo "recipe=make platform=$platform"
 	echo "device_cflags=$device_cflags"
 	for p in "$here"/*.patch; do
 		echo "patch=$(basename "$p") sha256:$(sha256 "$p")"
@@ -41,7 +44,7 @@ build() {
 		git -C "$src" apply -p1 "$p"
 	done
 
-	CFLAGS="$device_cflags" make -C "$src" platform=arm64 \
+	CFLAGS="$device_cflags" make -C "$src" platform="$platform" ${CC:+CC="$CC"} \
 		GIT_VERSION="\"$(printf %s "$commit" | cut -c1-7)\"" \
 		-j"$(getconf _NPROCESSORS_ONLN)"
 
