@@ -9,8 +9,8 @@ CPU=/sys/devices/system/cpu/cpu0/cpufreq
 export SLOT_ROOT="$ROOT"
 
 # The panel is portrait, so slot turns its picture a quarter turn onto it. If the picture is
-# upside down, change cw to ccw.
-export SLOT_ROTATE="${SLOT_ROTATE:-cw}"
+# upside down, change ccw to cw.
+export SLOT_ROTATE="${SLOT_ROTATE:-ccw}"
 
 mkdir -p "$LOGS"
 [ -f "$LOGS/slot.log" ] && mv -f "$LOGS/slot.log" "$LOGS/slot.log.1"
