@@ -541,12 +541,17 @@ impl Compositor {
         }
     }
 
+    /// Draws the game, or a still of it, into its rect with linear filtering. The panel is not a
+    /// whole multiple of the picture, 240 lines onto 213 on the TrimUI Smart, so nearest texels
+    /// would come out one and two pixels wide by turns. The filter reads only the picture's own
+    /// texels, so the black around a Game Boy screen does not bleed into its edges.
     fn game_pass(&mut self, vp: Viewport, still: Option<TexId>) {
         let (x, y, w, h) = self.game.placed();
-        let mut src = match still {
+        let picture = match still {
             Some(_) => WHOLE_TEXTURE,
             None => self.game.src,
         };
+        let mut src = picture;
         if self.game.bottom > 0.0 {
             src[3] *= (OUT_H as f32 - self.game.bottom) / OUT_H as f32;
         }
@@ -562,33 +567,56 @@ impl Compositor {
         let Some((cols, rows)) = place.span(self.size) else {
             return;
         };
-        let xs: Vec<usize> = cols
+        let x_in = texels(picture[0], picture[2], tw);
+        let y_in = texels(picture[1], picture[3], th);
+        let xs: Vec<Tap> = cols
             .clone()
-            .map(|i| nearest(src[0] + place.a_x(i) * src[2], tw))
+            .map(|i| tap_within(src[0] + place.a_x(i) * src[2], tw, x_in.clone()))
             .collect();
         let stride = self.size.0 as usize;
         let lift = |p: u32| -> u32 {
             let c = |shift: u32| ((((p >> shift) & 0xff) * bright) >> 8).min(255) << shift;
             c(16) | c(8) | c(0)
         };
+        let tw = tw as usize;
         for j in rows {
-            let ty = nearest(src[1] + place.a_y(j) * src[3], th);
-            let row = &pixels[ty * tw as usize..][..tw as usize];
+            let ty = tap_within(src[1] + place.a_y(j) * src[3], th, y_in.clone());
+            let (row_a, row_b) = (&pixels[ty.a * tw..][..tw], &pixels[ty.b * tw..][..tw]);
             let line =
                 &mut self.canvas[j as usize * stride..][cols.start as usize..cols.end as usize];
-            match bright {
-                256 => {
-                    for (o, &tx) in line.iter_mut().zip(&xs) {
-                        *o = row[tx] & 0xff_ffff;
-                    }
-                }
-                _ => {
-                    for (o, &tx) in line.iter_mut().zip(&xs) {
-                        *o = lift(row[tx]);
-                    }
-                }
+            for (o, x) in line.iter_mut().zip(&xs) {
+                let top = lerp(row_a[x.a], row_a[x.b], x.t);
+                let p = match ty.t {
+                    0 => top,
+                    t => lerp(top, lerp(row_b[x.a], row_b[x.b], x.t), t),
+                } & 0xff_ffff;
+                *o = match bright {
+                    256 => p,
+                    _ => lift(p),
+                };
             }
         }
+    }
+}
+
+/// The texels a source rect covers along one axis, `at` and `len` as fractions of `size`.
+fn texels(at: f32, len: f32, size: u32) -> std::ops::RangeInclusive<usize> {
+    let last = size.saturating_sub(1) as f32;
+    // A fraction of a texel either way is float error in a rect that sits on texel edges.
+    const SLACK: f32 = 1e-3;
+    let lo = (at * size as f32 + SLACK).floor().clamp(0.0, last) as usize;
+    let hi = ((at + len) * size as f32 - SLACK).ceil() - 1.0;
+    lo..=(hi.clamp(lo as f32, last) as usize)
+}
+
+/// A bilinear tap whose two texels stay inside `within`.
+fn tap_within(u: f32, len: u32, within: std::ops::RangeInclusive<usize>) -> Tap {
+    let t = tap(u, len, false);
+    let keep = |i: usize| i.clamp(*within.start(), *within.end());
+    let (a, b) = (keep(t.a), keep(t.b));
+    match a == b {
+        true => Tap { a, b, t: 0 },
+        false => Tap { a, b, t: t.t },
     }
 }
 

@@ -224,7 +224,7 @@ fn a_half_turn_flips_the_sprite_about_its_centre() {
 }
 
 #[test]
-fn the_game_fills_the_sp_frame_from_the_top_nearest_sampled() {
+fn the_game_fills_the_sp_frame_from_the_top_linearly_filtered() {
     let (mut c, frame) = smart();
     let mut game = vec![0u8; (SRC_W * SRC_H * 4) as usize];
     for px in game.chunks_exact_mut(4).take(SRC_W as usize) {
@@ -238,12 +238,40 @@ fn the_game_fills_the_sp_frame_from_the_top_nearest_sampled() {
     assert_eq!(shown(&frame, 319, 0), 0x302010);
     assert_eq!(
         shown(&frame, 0, 1),
-        0,
-        "pixel row 1 samples source row 1.13"
+        0x120c06,
+        "pixel row 1 falls 0.63 of the way from source row 0 to row 1"
     );
     let (_, top, w, h) = slot_gfx::game_rect(WINDOW, true);
     assert_eq!((top, w, h), (0, 320, 213));
     assert_eq!(shown(&frame, 0, h as u32), 0, "below the game rect");
+}
+
+#[test]
+fn the_filter_keeps_to_the_picture_so_its_border_does_not_bleed_in() {
+    let (mut c, frame) = smart();
+    let lit = [0x40, 0x80, 0xc0, 0xff];
+    let (x0, y0, pw, ph) = (40usize, 8usize, 160usize, 144usize);
+    let mut game = vec![0u8; (SRC_W * SRC_H * 4) as usize];
+    for (i, px) in game.chunks_exact_mut(4).enumerate() {
+        let (x, y) = (i % SRC_W as usize, i / SRC_W as usize);
+        if (x0..x0 + pw).contains(&x) && (y0..y0 + ph).contains(&y) {
+            px.copy_from_slice(&lit);
+        }
+    }
+    c.upload_game(&game);
+    c.set_screen_power(1.0);
+    c.set_game_fills_frame(true);
+    let (sw, sh) = (SRC_W as f32, SRC_H as f32);
+    c.set_game_source_rect([
+        x0 as f32 / sw,
+        y0 as f32 / sh,
+        pw as f32 / sw,
+        ph as f32 / sh,
+    ]);
+    frame_of(&mut c, &[Draw::Game]);
+    for (x, y) in [(0, 0), (319, 0), (0, 212), (319, 212), (160, 100)] {
+        assert_eq!(shown(&frame, x, y), 0xc08040, "({x}, {y})");
+    }
 }
 
 #[test]
