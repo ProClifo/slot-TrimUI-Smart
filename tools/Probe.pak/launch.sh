@@ -107,7 +107,7 @@ for dev in /dev/input/event*; do
 	pids="$pids $!"
 done
 if [ -n "$pids" ]; then
-	echo "Press, one at a time and in this order: UP DOWN LEFT RIGHT A B X Y L R SELECT START MENU VOL- VOL+ (then wait)" > "$HERE/probe-PRESS-BUTTONS-NOW.txt"
+	echo "Press, one at a time and in this order: UP DOWN LEFT RIGHT A B X Y L R SELECT START MENU (then wait)" > "$HERE/probe-PRESS-BUTTONS-NOW.txt"
 	sleep "$PRESS_SECONDS"
 	kill $pids 2> /dev/null
 	wait 2> /dev/null
