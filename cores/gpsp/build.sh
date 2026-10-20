@@ -4,7 +4,7 @@ set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 
 # The H700's recipe unless overridden: the TrimUI Smart builds with
-# GPSP_PLATFORM=armv7-neon-hardfloat, GPSP_CFLAGS= and CC set to its cross compiler.
+# GPSP_PLATFORM=armv7-neon-hardfloat, GPSP_CFLAGS= and CC and CXX set to its cross compilers.
 platform="${GPSP_PLATFORM:-arm64}"
 device_cflags="${GPSP_CFLAGS--mcpu=cortex-a53}"
 
@@ -44,7 +44,7 @@ build() {
 		git -C "$src" apply -p1 "$p"
 	done
 
-	CFLAGS="$device_cflags" make -C "$src" platform="$platform" ${CC:+CC="$CC"} \
+	CFLAGS="$device_cflags" make -C "$src" platform="$platform" ${CC:+CC="$CC"} ${CXX:+CXX="$CXX"} \
 		GIT_VERSION="\"$(printf %s "$commit" | cut -c1-7)\"" \
 		-j"$(getconf _NPROCESSORS_ONLN)"
 

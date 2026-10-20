@@ -414,6 +414,7 @@ tasks:
       GPSP_PLATFORM: armv7-neon-hardfloat
       GPSP_CFLAGS: ''
       CC: '{{.ROOT_DIR}}/tools/trimui/cc'
+      CXX: '{{.ROOT_DIR}}/tools/trimui/c++'
     status:
       - test -f vendor/trimui/gpsp_libretro.so
       - test "$(cat vendor/trimui/gpsp_libretro.so.meta 2>/dev/null)" = "$(sh cores/gpsp/build.sh stamp {{.GPSP_COMMIT}})"
