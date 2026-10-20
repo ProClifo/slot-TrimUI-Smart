@@ -85,6 +85,8 @@ const DISPDBG_MAX: u32 = 255;
 enum Backlight {
     Class(PathBuf),
     Dispdbg(PathBuf),
+    #[cfg(all(unix, feature = "trimui"))]
+    Disp(fs::File),
 }
 
 enum Led {
@@ -123,22 +125,27 @@ impl DevicePlatform {
                 dbg.join("param")
                     .is_file()
                     .then_some(Backlight::Dispdbg(dbg))
+                    .or_else(disp_backlight)
             }
         };
         let battery = first_dir(&sysfs.join("class/power_supply"), is_battery);
         let rtc = first_dir(&sysfs.join("class/rtc"), |_| true);
         let motor = Motor::open(sysfs);
-        let led = first_dir(&sysfs.join("class/leds"), |d| {
-            d.join("multi_intensity").is_file() || d.join("brightness").is_file()
-        })
-        .map(|dir| {
-            if dir.join("multi_intensity").is_file() {
-                Led::Multi(dir)
-            } else {
-                let max = read_number(&dir.join("max_brightness")).unwrap_or(255);
-                Led::Mono { dir, max }
-            }
-        });
+        // The Smart has led1 to led3 and nothing yet says which is which, so none is driven.
+        let led = match cfg!(feature = "trimui") {
+            true => None,
+            false => first_dir(&sysfs.join("class/leds"), |d| {
+                d.join("multi_intensity").is_file() || d.join("brightness").is_file()
+            })
+            .map(|dir| {
+                if dir.join("multi_intensity").is_file() {
+                    Led::Multi(dir)
+                } else {
+                    let max = read_number(&dir.join("max_brightness")).unwrap_or(255);
+                    Led::Mono { dir, max }
+                }
+            }),
+        };
         DevicePlatform {
             root,
             sysfs: sysfs.to_path_buf(),
@@ -182,6 +189,8 @@ impl DevicePlatform {
         let backlight = match &self.backlight {
             Some(Backlight::Class(dir)) => leaf(dir),
             Some(Backlight::Dispdbg(_)) => "dispdbg".to_string(),
+            #[cfg(all(unix, feature = "trimui"))]
+            Some(Backlight::Disp(_)) => "disp".to_string(),
             None => "no backlight".to_string(),
         };
         let motor = match &self.motor {
@@ -206,13 +215,19 @@ fn ran(what: &str, result: std::io::Result<std::process::ExitStatus>) {
     }
 }
 
+/// Whether a sysfs capability bitmap sets `bit`. The kernel prints it as longs, so the words
+/// are 32 bits wide on a 32-bit kernel such as the TrimUI Smart's.
 pub fn has_bit(mask: &str, bit: u16) -> bool {
+    has_bit_in(mask, bit, std::ffi::c_ulong::BITS as u16)
+}
+
+pub fn has_bit_in(mask: &str, bit: u16, word_bits: u16) -> bool {
     let words: Vec<&str> = mask.split_whitespace().collect();
-    let from_end = usize::from(bit) / 64;
+    let from_end = usize::from(bit / word_bits);
     let Some(word) = words.len().checked_sub(from_end + 1).map(|i| words[i]) else {
         return false;
     };
-    u64::from_str_radix(word, 16).is_ok_and(|w| w >> (bit % 64) & 1 == 1)
+    u64::from_str_radix(word, 16).is_ok_and(|w| w >> (bit % word_bits) & 1 == 1)
 }
 
 pub fn rumble_node(sysfs: &Path) -> Option<String> {
@@ -411,9 +426,55 @@ fn first_dir(parent: &Path, keep: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     names.into_iter().find(|p| keep(p))
 }
 
+/// A supply that reports a charge and either calls itself a battery or, like the TrimUI
+/// Smart's lradc_battery, is named as one.
 fn is_battery(dir: &Path) -> bool {
-    fs::read_to_string(dir.join("type")).is_ok_and(|t| t.trim() == "Battery")
-        && dir.join("capacity").is_file()
+    let typed = fs::read_to_string(dir.join("type")).is_ok_and(|t| t.trim() == "Battery");
+    let named = dir
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().contains("battery"));
+    (typed || named) && dir.join("capacity").is_file()
+}
+
+/// The sunxi display driver's LCD brightness, which is all the TrimUI Smart has for a backlight:
+/// its kernel has no backlight class. Taken only if reading it back gives a level.
+#[cfg(all(unix, feature = "trimui"))]
+fn disp_backlight() -> Option<Backlight> {
+    let disp = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/disp")
+        .ok()?;
+    let level = lcd_brightness(&disp, None)?;
+    eprintln!("slot: /dev/disp brightness {level}");
+    Some(Backlight::Disp(disp))
+}
+
+#[cfg(not(all(unix, feature = "trimui")))]
+fn disp_backlight() -> Option<Backlight> {
+    None
+}
+
+#[cfg(all(unix, feature = "trimui"))]
+const DISP_LCD_SET_BRIGHTNESS: c_ulong = 0x102;
+
+#[cfg(all(unix, feature = "trimui"))]
+const DISP_LCD_GET_BRIGHTNESS: c_ulong = 0x103;
+
+/// Reads the level, or sets it to `set`, on screen 0. Returns the level, or None if refused.
+#[cfg(all(unix, feature = "trimui"))]
+fn lcd_brightness(disp: &fs::File, set: Option<u32>) -> Option<u32> {
+    let mut args: [c_ulong; 4] = [0, set.unwrap_or(0) as c_ulong, 0, 0];
+    let request = match set {
+        Some(_) => DISP_LCD_SET_BRIGHTNESS,
+        None => DISP_LCD_GET_BRIGHTNESS,
+    };
+    let rc = unsafe { ioctl(disp.as_raw_fd(), request, args.as_mut_ptr()) };
+    match (set, rc) {
+        (_, rc) if rc < 0 => None,
+        (Some(v), _) => Some(v),
+        (None, rc) => (rc as u32 <= DISPDBG_MAX).then_some(rc as u32),
+    }
 }
 
 fn read_number(path: &Path) -> Option<u32> {
@@ -487,6 +548,12 @@ impl Platform for DevicePlatform {
                 write(dir.join("command"), "setbl".to_string());
                 write(dir.join("param"), value.to_string());
                 write(dir.join("start"), "1".to_string());
+            }
+            #[cfg(all(unix, feature = "trimui"))]
+            Backlight::Disp(disp) => {
+                if lcd_brightness(disp, Some(value)).is_none() {
+                    eprintln!("slot: /dev/disp: set brightness {value} refused");
+                }
             }
         }
     }

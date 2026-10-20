@@ -2,7 +2,12 @@ use std::path::{Path, PathBuf};
 
 use slot_input::{Btn, RawEvent};
 
-pub const EVENT_BYTES: usize = 24;
+/// A struct input_event: a timeval, whose two longs are 4 bytes each on 32-bit ARM, then the
+/// type, code and value.
+pub const EVENT_BYTES: usize = 2 * std::mem::size_of::<std::ffi::c_long>() + 8;
+
+/// Where the type field starts, past the timeval.
+pub const EVENT_TYPE_AT: usize = EVENT_BYTES - 8;
 
 pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
@@ -94,16 +99,22 @@ pub struct Ev {
 
 pub fn decode(bytes: &[u8]) -> Option<Ev> {
     let packet: &[u8; EVENT_BYTES] = bytes.get(..EVENT_BYTES)?.try_into().ok()?;
+    let at = EVENT_TYPE_AT;
     Some(Ev {
-        kind: u16::from_le_bytes([packet[16], packet[17]]),
-        code: u16::from_le_bytes([packet[18], packet[19]]),
-        value: i32::from_le_bytes([packet[20], packet[21], packet[22], packet[23]]),
+        kind: u16::from_le_bytes([packet[at], packet[at + 1]]),
+        code: u16::from_le_bytes([packet[at + 2], packet[at + 3]]),
+        value: i32::from_le_bytes([
+            packet[at + 4],
+            packet[at + 5],
+            packet[at + 6],
+            packet[at + 7],
+        ]),
     })
 }
 
 pub fn to_raw(ev: Ev) -> Option<RawEvent> {
     let btn = match ev.kind {
-        EV_KEY => code_to_btn(ev.code)?,
+        EV_KEY => device_code_to_btn(ev.code)?,
         EV_SW if ev.code == SW_LID => Btn::Lid,
         _ => return None,
     };
@@ -132,6 +143,39 @@ pub fn code_to_btn(code: u16) -> Option<Btn> {
         116 => Btn::Power,
         _ => return None,
     })
+}
+
+/// The TrimUI Smart's gpio-keys, which send keyboard codes, the D-pad's included. It has no
+/// L2, R2, volume or power key.
+pub fn trimui_code_to_btn(code: u16) -> Option<Btn> {
+    Some(match code {
+        103 => Btn::Up,
+        108 => Btn::Down,
+        105 => Btn::Left,
+        106 => Btn::Right,
+        57 => Btn::A,
+        29 => Btn::B,
+        42 => Btn::X,
+        56 => Btn::Y,
+        15 => Btn::L1,
+        14 => Btn::R1,
+        97 => Btn::Select,
+        28 => Btn::Start,
+        1 => Btn::Menu,
+        _ => return None,
+    })
+}
+
+const TRIMUI_WANTED: [u16; 13] = [103, 108, 105, 106, 57, 29, 42, 56, 15, 14, 97, 28, 1];
+
+#[cfg(not(feature = "trimui"))]
+fn device_code_to_btn(code: u16) -> Option<Btn> {
+    code_to_btn(code)
+}
+
+#[cfg(feature = "trimui")]
+fn device_code_to_btn(code: u16) -> Option<Btn> {
+    trimui_code_to_btn(code)
 }
 
 const WANTED: [u16; 15] = [
@@ -167,7 +211,11 @@ fn wanted_node(device: &Path) -> bool {
     let cap = |file: &str| std::fs::read_to_string(device.join("capabilities").join(file));
     let keys = cap("key").unwrap_or_default();
     let lid = cap("sw").is_ok_and(|sw| has_bit(&sw, SW_LID));
-    lid || WANTED.iter().any(|bit| has_bit(&keys, *bit))
+    let wanted: &[u16] = match cfg!(feature = "trimui") {
+        true => &TRIMUI_WANTED,
+        false => &WANTED,
+    };
+    lid || wanted.iter().any(|bit| has_bit(&keys, *bit))
 }
 
 pub fn device_name(sys: &Path, node: &Path) -> String {

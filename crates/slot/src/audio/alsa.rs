@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
@@ -27,7 +27,7 @@ const DEVICES: [&str; 4] = ["plug:default", "default", "plughw:0,0", "hw:0,0"];
 type PcmOpen = unsafe extern "C" fn(*mut *mut c_void, *const c_char, c_int, c_int) -> c_int;
 type PcmSetParams =
     unsafe extern "C" fn(*mut c_void, c_int, c_int, c_uint, c_uint, c_int, c_uint) -> c_int;
-type PcmWritei = unsafe extern "C" fn(*mut c_void, *const c_void, u64) -> i64;
+type PcmWritei = unsafe extern "C" fn(*mut c_void, *const c_void, c_ulong) -> c_long;
 type PcmRecover = unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int;
 type PcmDrop = unsafe extern "C" fn(*mut c_void) -> c_int;
 type PcmClose = unsafe extern "C" fn(*mut c_void) -> c_int;
@@ -266,7 +266,7 @@ impl Playback {
                 (self.alsa.writei)(
                     pcm,
                     buf[at..].as_ptr() as *const c_void,
-                    (PERIOD_FRAMES - written) as u64,
+                    (PERIOD_FRAMES - written) as c_ulong,
                 )
             };
             if frames < 0 {

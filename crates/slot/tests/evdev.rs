@@ -1,16 +1,17 @@
 use std::fs;
 use std::path::Path;
 
-use slot::input::evdev::{decode, has_bit, pick_devices, to_raw, EVENT_BYTES};
+use slot::input::evdev::{
+    decode, has_bit, pick_devices, to_raw, trimui_code_to_btn, EVENT_BYTES, EVENT_TYPE_AT,
+};
 use slot_input::{Btn, RawEvent};
 
 fn packet(kind: u16, code: u16, value: i32) -> [u8; EVENT_BYTES] {
     let mut b = [0x11u8; EVENT_BYTES];
-    b[16] = kind as u8;
-    b[17] = (kind >> 8) as u8;
-    b[18] = code as u8;
-    b[19] = (code >> 8) as u8;
-    b[20..24].copy_from_slice(&value.to_le_bytes());
+    let at = EVENT_TYPE_AT;
+    b[at..at + 2].copy_from_slice(&kind.to_le_bytes());
+    b[at + 2..at + 4].copy_from_slice(&code.to_le_bytes());
+    b[at + 4..at + 8].copy_from_slice(&value.to_le_bytes());
     b
 }
 
@@ -395,5 +396,48 @@ fn only_the_skus_nextui_lists_with_a_left_stick_have_one() {
     }
     for t in ["rgsp", "rg35xxsp", "rg35xxplus", "rg34xx", "rg28xx", ""] {
         assert!(!has_left_stick(t), "{t}");
+    }
+}
+
+#[test]
+fn an_event_is_a_timeval_then_eight_bytes() {
+    assert_eq!(EVENT_BYTES, 2 * std::mem::size_of::<std::ffi::c_long>() + 8);
+    assert_eq!(EVENT_TYPE_AT, EVENT_BYTES - 8);
+}
+
+/// What the TrimUI Smart's gpio-keys sent, one press each, in the order the buttons were pressed.
+#[test]
+fn the_trimui_smarts_keyboard_codes_are_its_buttons() {
+    let pressed = [
+        (103, Btn::Up),
+        (108, Btn::Down),
+        (105, Btn::Left),
+        (106, Btn::Right),
+        (57, Btn::A),
+        (29, Btn::B),
+        (42, Btn::X),
+        (56, Btn::Y),
+        (15, Btn::L1),
+        (14, Btn::R1),
+        (97, Btn::Select),
+        (28, Btn::Start),
+        (1, Btn::Menu),
+    ];
+    for (code, btn) in pressed {
+        assert_eq!(trimui_code_to_btn(code), Some(btn), "code {code}");
+    }
+    assert_eq!(trimui_code_to_btn(104), None);
+    assert_eq!(trimui_code_to_btn(116), None);
+}
+
+/// The TrimUI Smart's 32-bit kernel prints its key bitmap in 32-bit words.
+#[test]
+fn a_32_bit_kernels_key_bitmap_is_read_in_32_bit_words() {
+    let smart = "3782 0 3000400 3000c002";
+    for code in [1, 14, 15, 28, 29, 42, 56, 57, 97, 103, 105, 106, 108] {
+        assert!(slot_power::has_bit_in(smart, code, 32), "code {code}");
+    }
+    for code in [0, 2, 30, 64, 116, 0x130] {
+        assert!(!slot_power::has_bit_in(smart, code, 32), "code {code}");
     }
 }

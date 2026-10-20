@@ -135,10 +135,15 @@ pub fn run() {
     slot::boot_time::mark("bezel");
     let mut input = DeviceInput::open(&root);
     slot::boot_time::mark("input");
-    let card = root.clone();
-    let _ = std::thread::Builder::new()
-        .name("slot-bootlogo".into())
-        .spawn(move || slot::bootlogo::refresh(&card));
+    // The boot logo lives on a BaseOS partition. The TrimUI Smart boots its own firmware from
+    // internal storage, which slot leaves alone.
+    #[cfg(not(feature = "trimui"))]
+    {
+        let card = root.clone();
+        let _ = std::thread::Builder::new()
+            .name("slot-bootlogo".into())
+            .spawn(move || slot::bootlogo::refresh(&card));
+    }
     let mut drawn = false;
     frontend.drive_emulator();
     let mut pacer = Pacer::new();

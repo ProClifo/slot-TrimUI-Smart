@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# The TrimUI Smart: brightness through /dev/disp, and its LEDs left alone.
+trimui = []
+
 [dependencies]
 
 [dev-dependencies]

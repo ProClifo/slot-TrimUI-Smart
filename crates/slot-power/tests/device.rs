@@ -117,6 +117,18 @@ fn the_battery_is_found_past_the_supplies_that_are_not_one() {
     assert_eq!(platform(&d).battery().map(|b| b.percent), Some(87));
 }
 
+/// The TrimUI Smart's gauge, as its 3.4 kernel lays it out: no type attribute says Battery.
+#[test]
+fn a_supply_named_as_a_battery_is_one_even_without_a_type() {
+    let d = tempfile::tempdir().unwrap();
+    let gauge = d.path().join("class/power_supply/lradc_battery");
+    fs::create_dir_all(&gauge).unwrap();
+    fs::write(gauge.join("capacity"), "100\n").unwrap();
+    fs::write(gauge.join("status"), "Charging\n").unwrap();
+    let battery = platform(&d).battery().unwrap();
+    assert_eq!((battery.percent, battery.charge), (100, Charge::Charging));
+}
+
 #[test]
 fn a_gauge_that_reads_as_nonsense_is_no_reading_rather_than_zero() {
     let d = sysfs("255", "not a number");
